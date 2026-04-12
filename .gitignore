@@ -1,0 +1,13 @@
+.venv
+venv/
+
+.idea
+
+__pycache__/
+*.py[cod]
+
+.DS_Store
+
+.env
+
+examples
