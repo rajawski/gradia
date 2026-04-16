@@ -1,4 +1,6 @@
-Gradia - A command-line tool for transferring the color and tonal style of one photo onto another.
+# Gradia
+
+A command-line tool for transferring the color and tonal style of one photo onto another.
 
 Built for photographers and designers who want to match the look of a reference image - film stock, color grade, lighting mood - without manually adjusting curves or color wheels.
 
