@@ -401,10 +401,36 @@ class Gradia:
                 0, n_ref - 1
             )
 
+            # Displacement: how far each target pixel needs to move along
+            # this random direction to match the reference distribution.
+            #
+            # For each target pixel, the i-th smallest target projection
+            # should become the i-th smallest reference projection (that's
+            # the 1D optimal transport solution - sort-and-match by rank).
+            # Subtracting the current target projection from the matched
+            # reference projection gives the 1D distance the pixel needs to
+            # travel. Back-projecting this scalar along the 3D direction
+            # (via the outer product below) turns it into a 3D color move.
             displacement = ref_sorted[ref_indices] - tgt_proj
 
-            # Apply the displacement immediately (iterative advection)
-            result_flat += np.outer(displacement, direction)
+            # Apply the displacement with a step factor (iterative advection).
+            #
+            # Quantile matching is noisy because the reference is sampled and
+            # target ranks map imprecisely to reference indices. Over 200
+            # iterations, this noise causes small residual movements even
+            # after the source has converged toward the reference, and some
+            # pixels end up pushed outside [0, 1]. The final clip then
+            # crushes those pixels to the edges of the range, which shows up
+            # as blown highlights, crushed shadows, or desaturated colors.
+            #
+            # A step factor of 0.5 halves each iteration's move. With 200
+            # iterations, effective convergence is equivalent to ~100 full
+            # steps, which is plenty while staying well within the valid
+            # color range. The principle is to keep total accumulated
+            # motion bounded: either few iterations at full step, or many
+            # iterations at a fractional step.
+            STEP_FACTOR = 0.5
+            result_flat += STEP_FACTOR * np.outer(displacement, direction)
 
         result_flat = np.clip(result_flat, 0, 1)
 
