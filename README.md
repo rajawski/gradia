@@ -178,7 +178,7 @@ python gradia.py reference.jpg photo.jpg --method wasserstein
 
 Uses **Sliced Wasserstein optimal transport with iterative advection** to find a non-linear mapping between the two color distributions. Each iteration picks a random direction in 3D LAB space, projects both color clouds onto that line, solves exact 1D optimal transport via rank-based quantile matching, and applies the displacement immediately before the next iteration.
 
-**How it works:** In 1D, optimal transport has an exact closed-form solution - sort both distributions and match them by rank. Over many iterations in different random directions, the source distribution converges onto the reference. Unlike a one-shot accumulation, iterative advection lets each subsequent direction see a source that's already been partially transported, so the algorithm actually commits to matching the reference rather than averaging many tiny partial corrections. Based on the approach from Coeurjolly's *OTColorTransfer*. Does not require the POT library.
+**How it works:** In 1D, optimal transport has an exact closed-form solution - sort both distributions and match them by rank. Over many iterations in different random directions, the source distribution converges onto the reference. Unlike a one-shot accumulation, iterative advection lets each subsequent direction see a source that's already been partially transported, so the algorithm actually commits to matching the reference rather than averaging many tiny partial corrections. Does not require the POT library.
 
 **Best for:**
 - The most accurate and natural results
@@ -348,6 +348,9 @@ Reduce iterations. Results are still good at lower counts:
 ```bash
 python gradia.py ref.jpg photo.jpg --method wasserstein --n-slices 50
 ```
+
+**Wasserstein results look blown out or washed out in places**
+Too much total motion is pushing some pixels outside the valid color range, where they get clipped. Reduce the intensity with `-i 0.6` or lower, or reduce iterations with `--n-slices 100`.
 
 **16-bit TIFF output looks correct but washed out in preview**
 The `--preview` window scales 16-bit images to 8-bit for display only. The saved file is correct - check it in your photo editor rather than the preview window.
