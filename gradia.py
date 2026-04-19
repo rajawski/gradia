@@ -127,18 +127,6 @@ def _blend(result: np.ndarray, original: np.ndarray, intensity: float, bit_depth
     return np.clip(blended, 0, val_max).astype(dtype)
 
 
-def _to_float(img: np.ndarray, bit_depth: int) -> np.ndarray:
-    """Normalize image to float32 in [0, 1]."""
-    val_max = _MAX_VAL_8BIT if bit_depth == 8 else _MAX_VAL_16BIT
-    return img.astype(np.float32) / val_max
-
-
-def _from_float(img: np.ndarray, bit_depth: int) -> np.ndarray:
-    """Convert float32 [0, 1] back to uint8 or uint16."""
-    val_max = _MAX_VAL_8BIT if bit_depth == 8 else _MAX_VAL_16BIT
-    dtype   = np.uint8      if bit_depth == 8 else np.uint16
-    return np.clip(img * val_max, 0, val_max).astype(dtype)
-
 
 # ---------------------------------------------------------------------------
 # Gradia - main class
@@ -307,14 +295,16 @@ class Gradia:
         tgt_flat    = tgt_lab.reshape(-1, 3)
         result_flat = tgt_flat.copy()
 
+        # Compute cluster labels once - they don't change between iterations
+        labels = km_tgt.predict(tgt_flat)
+
         for ci in range(n_colors):
             tgt_color = tgt_centers[ci]
             dists     = np.linalg.norm(ref_centers - tgt_color, axis=1)
             ref_match = ref_centers[np.argmin(dists)]
             delta     = ref_match - tgt_color
 
-            labels = km_tgt.predict(tgt_flat)
-            mask   = labels == ci
+            mask = labels == ci
 
             pixel_dists = np.linalg.norm(tgt_flat[mask] - tgt_color, axis=1, keepdims=True)
             sigma  = np.percentile(pixel_dists, 75) + 1e-6
