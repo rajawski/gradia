@@ -390,13 +390,22 @@ class Gradia:
 
             displacement = ref_sorted[ref_indices] - tgt_proj
 
-            # Back-project displacement into 3D and accumulate
-            result_flat += np.outer(displacement, direction)
+            # Back-project displacement into 3D and accumulate.
+            # Divide by n_slices so the total accumulated displacement stays
+            # in a sensible range regardless of how many slices are used.
+            # Without this, values drift far outside [0, 1] and the final
+            # clip posterizes the result into blocks.
+            result_flat += np.outer(displacement, direction) / n_slices
 
         result_flat = np.clip(result_flat, 0, 1)
 
-        result_lab = (result_flat.reshape(h, w, 3) * 255.0).astype(np.uint8)
+        # Stay in float32 through the LAB->BGR conversion to preserve the
+        # full precision of the transport result. Converting to uint8 first
+        # would quantize 32-bit float values to 256 levels, losing the subtle
+        # color nuance the transport computed.
+        result_lab = (result_flat.reshape(h, w, 3) * 255.0).astype(np.float32)
         result8    = cv2.cvtColor(result_lab, cv2.COLOR_LAB2BGR)
+        result8    = np.clip(result8, 0, 255).astype(np.uint8)
 
         result = result8.astype(np.uint16) * 256 if bit_depth == 16 else result8
         return _blend(result, target, self.intensity, bit_depth)
