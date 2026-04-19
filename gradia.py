@@ -328,19 +328,23 @@ class Gradia:
     def grade_wasserstein(self, target: np.ndarray, bit_depth: int = 8,
                            n_slices: int = 200, sample_size: int = 50000) -> np.ndarray:
         """
-        Sliced Wasserstein optimal transport color grading.
+        Sliced Wasserstein optimal transport color grading via iterative advection.
 
-        Projects both color distributions onto many random 1D directions,
-        solves exact 1D optimal transport on each slice via quantile matching,
-        and accumulates the displacements back into 3D LAB space. Handles
-        complex, multimodal color distributions that confuse linear methods.
-        Does not require the POT library.
+        Projects both color distributions onto a random 1D direction in LAB
+        space, solves exact 1D optimal transport on that slice via quantile
+        matching, and applies the displacement immediately before sampling
+        the next random direction. Over many iterations the source
+        distribution converges onto the reference distribution.
+
+        Handles complex, multimodal color distributions that confuse linear
+        methods. Does not require the POT library.
 
         Args:
-            n_slices:    Number of random projection slices. More = more accurate
-                         but slower. 200 is a good balance.
-            sample_size: Max reference pixels sampled per slice for quantile
-                         estimation. Higher = more accurate quantile matching.
+            n_slices:    Number of iterations. Each iteration samples one
+                         random direction and advects the source. 200 is a
+                         good balance of quality vs speed.
+            sample_size: Max reference pixels sampled for quantile estimation.
+                         Higher = more accurate quantile matching.
         """
         ref8 = to_8bit(self.reference)
         tgt8 = to_8bit(target)
@@ -362,15 +366,24 @@ class Gradia:
 
         result_flat = tgt_flat.copy()
 
-        log.debug(f"Running Sliced Wasserstein transport ({n_slices} slices)...")
+        log.debug(f"Running Sliced Wasserstein transport ({n_slices} iterations)...")
 
+        # Iterative advection. Each iteration picks a random direction in 3D
+        # LAB space, projects both clouds onto that line, solves the 1D
+        # optimal transport via quantile matching, then APPLIES the
+        # displacement immediately before the next iteration. This is the
+        # critical difference from accumulate-and-average: each subsequent
+        # direction sees a source that has already been partially transported
+        # toward the reference, so the algorithm converges on the reference
+        # distribution over successive iterations rather than averaging many
+        # tiny corrections that never fully commit.
         for _ in range(n_slices):
             # Random unit direction in 3D LAB color space
             direction = rng.standard_normal(3)
             direction /= np.linalg.norm(direction)
 
             # Project both clouds onto this 1D direction
-            ref_proj = ref_sample @ direction      # shape: (n_ref,)
+            ref_proj = ref_sample  @ direction     # shape: (n_ref,)
             tgt_proj = result_flat @ direction     # shape: (n_tgt,)
 
             # 1D OT via quantile matching - sort reference, rank target,
@@ -390,22 +403,23 @@ class Gradia:
 
             displacement = ref_sorted[ref_indices] - tgt_proj
 
-            # Back-project displacement into 3D and accumulate.
-            # Divide by n_slices so the total accumulated displacement stays
-            # in a sensible range regardless of how many slices are used.
-            # Without this, values drift far outside [0, 1] and the final
-            # clip posterizes the result into blocks.
-            result_flat += np.outer(displacement, direction) / n_slices
+            # Apply the displacement immediately (iterative advection)
+            result_flat += np.outer(displacement, direction)
 
         result_flat = np.clip(result_flat, 0, 1)
 
-        # Stay in float32 through the LAB->BGR conversion to preserve the
-        # full precision of the transport result. Converting to uint8 first
-        # would quantize 32-bit float values to 256 levels, losing the subtle
-        # color nuance the transport computed.
-        result_lab = (result_flat.reshape(h, w, 3) * 255.0).astype(np.float32)
+        # Convert back to uint8 LAB before the colorspace conversion.
+        # cv2.cvtColor interprets LAB ranges differently based on dtype:
+        # uint8 input expects L, a, b all in [0, 255] (OpenCV's internal
+        # uint8 encoding), while float32 input expects L in [0, 100] and
+        # a, b in [-128, 127]. Since we stored normalized uint8-encoded
+        # LAB values (divided by 255 after BGR2LAB on uint8 input), we
+        # MUST cast back to uint8 here - passing a float32 array of those
+        # same numerical values would be silently misinterpreted and
+        # produce wildly wrong output colors that mostly preserve L but
+        # wreck a and b, which looks like "only exposure changed".
+        result_lab = (result_flat.reshape(h, w, 3) * 255.0).astype(np.uint8)
         result8    = cv2.cvtColor(result_lab, cv2.COLOR_LAB2BGR)
-        result8    = np.clip(result8, 0, 255).astype(np.uint8)
 
         result = result8.astype(np.uint16) * 256 if bit_depth == 16 else result8
         return _blend(result, target, self.intensity, bit_depth)
@@ -563,7 +577,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Wasserstein-specific
     parser.add_argument("--n-slices",
         type=int, default=200,
-        help="(wasserstein method) Random projection slices. More = more accurate, slower.")
+        help="(wasserstein method) Number of advection iterations. More = more accurate, slower.")
 
     # Shared by kantorovich and wasserstein
     parser.add_argument("--sample-size",
