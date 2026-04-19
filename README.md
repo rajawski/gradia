@@ -176,9 +176,9 @@ Uses **K-means clustering** to extract the dominant colors from each image, matc
 python gradia.py reference.jpg photo.jpg --method wasserstein
 ```
 
-Uses **Sliced Wasserstein optimal transport** to find a non-linear mapping between the two color distributions. Projects both color clouds onto many random 1D directions, solves exact optimal transport on each 1D slice via quantile matching, and accumulates the displacements back into 3D LAB space.
+Uses **Sliced Wasserstein optimal transport with iterative advection** to find a non-linear mapping between the two color distributions. Each iteration picks a random direction in 3D LAB space, projects both color clouds onto that line, solves exact 1D optimal transport via rank-based quantile matching, and applies the displacement immediately before the next iteration.
 
-**How it works:** In 1D, optimal transport has an exact closed-form solution - just sort both distributions and match them by rank. By averaging this over many random projections through 3D color space, you get an accurate approximation of the true Wasserstein transport map without the computational cost of solving the full 3D problem. Does not require the POT library.
+**How it works:** In 1D, optimal transport has an exact closed-form solution - sort both distributions and match them by rank. Over many iterations in different random directions, the source distribution converges onto the reference. Unlike a one-shot accumulation, iterative advection lets each subsequent direction see a source that's already been partially transported, so the algorithm actually commits to matching the reference rather than averaging many tiny partial corrections. Based on the approach from Coeurjolly's *OTColorTransfer*. Does not require the POT library.
 
 **Best for:**
 - The most accurate and natural results
@@ -188,14 +188,14 @@ Uses **Sliced Wasserstein optimal transport** to find a non-linear mapping betwe
 
 **Tradeoffs:**
 - Slowest method - runtime scales with `--n-slices`
-- More slices = more accurate but slower
+- More iterations = more accurate but slower
 
 **Flags:**
 
 | Flag | Default | Description |
 |---|---|---|
-| `--n-slices` | `200` | Random projection slices. More = more accurate, slower |
-| `--sample-size` | `50000` | Max reference pixels sampled per slice |
+| `--n-slices` | `200` | Number of advection iterations. More = more accurate, slower |
+| `--sample-size` | `50000` | Max reference pixels sampled for quantile estimation |
 
 ---
 
@@ -225,7 +225,7 @@ usage: gradia.py [-h]
 | `-i, --intensity` | `0.8` | Grade intensity: `0.0` = no change, `1.0` = full grade |
 | `-m, --method` | `reinhard` | Grading method (see Methods above) |
 | `--n-colors` | `8` | Palette colors for K-means (forgy method) |
-| `--n-slices` | `200` | Projection slices (wasserstein method) |
+| `--n-slices` | `200` | Advection iterations (wasserstein method) |
 | `--sample-size` | `50000` | Max pixels sampled (kantorovich and wasserstein) |
 | `--visualize` | off | Save a before/after histogram PNG alongside each output |
 | `--preview` | off | Show side-by-side comparison before saving |
@@ -261,7 +261,7 @@ python gradia.py reference.jpg photo.jpg --method kantorovich
 python gradia.py reference.jpg photo.jpg --method wasserstein
 ```
 
-**Faster wasserstein with fewer slices**
+**Faster wasserstein with fewer iterations**
 ```bash
 python gradia.py reference.jpg photo.jpg --method wasserstein --n-slices 50
 ```
@@ -344,7 +344,7 @@ pip install POT
 ```
 
 **Wasserstein is too slow**
-Reduce slices. Results are still good at lower counts:
+Reduce iterations. Results are still good at lower counts:
 ```bash
 python gradia.py ref.jpg photo.jpg --method wasserstein --n-slices 50
 ```
