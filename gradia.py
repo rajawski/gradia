@@ -295,22 +295,49 @@ class Gradia:
         tgt_flat    = tgt_lab.reshape(-1, 3)
         result_flat = tgt_flat.copy()
 
-        # Compute cluster labels once - they don't change between iterations
-        labels = km_tgt.predict(tgt_flat)
-
+        # Precompute per-cluster deltas: the color offset from each target
+        # cluster center to its nearest reference cluster center.
+        deltas = np.zeros((n_colors, 3), dtype=np.float32)
         for ci in range(n_colors):
             tgt_color = tgt_centers[ci]
             dists     = np.linalg.norm(ref_centers - tgt_color, axis=1)
             ref_match = ref_centers[np.argmin(dists)]
-            delta     = ref_match - tgt_color
+            deltas[ci] = ref_match - tgt_color
 
-            mask = labels == ci
+        # Soft clustering. Instead of hard-assigning each pixel to exactly
+        # one cluster (which produces visible seams at cluster boundaries),
+        # compute a weight for every pixel against every cluster based on
+        # distance. The final correction is a weighted average of all
+        # cluster deltas, which blends smoothly across boundaries.
+        #
+        # Sigma is set from the median distance between all cluster
+        # centers - this auto-scales the falloff to the palette geometry,
+        # so tightly-packed palettes get sharper weights and widely-spaced
+        # palettes get softer ones.
+        center_dists = np.linalg.norm(
+            tgt_centers[:, None, :] - tgt_centers[None, :, :], axis=2
+        )
+        # Use the upper triangle (excluding the diagonal of zeros) for the median
+        upper = center_dists[np.triu_indices(n_colors, k=1)]
+        sigma = (np.median(upper) + 1e-6) * 0.75
 
-            pixel_dists = np.linalg.norm(tgt_flat[mask] - tgt_color, axis=1, keepdims=True)
-            sigma  = np.percentile(pixel_dists, 75) + 1e-6
-            weight = np.exp(-0.5 * (pixel_dists / sigma) ** 2)
+        # Distance from every pixel to every cluster center.
+        # Shape: (n_pixels, n_colors)
+        pixel_to_centers = np.linalg.norm(
+            tgt_flat[:, None, :] - tgt_centers[None, :, :], axis=2
+        )
 
-            result_flat[mask] += delta * weight
+        # Gaussian weights, normalized so each pixel's weights sum to 1.
+        # Shape: (n_pixels, n_colors)
+        weights = np.exp(-0.5 * (pixel_to_centers / sigma) ** 2)
+        weights /= weights.sum(axis=1, keepdims=True) + 1e-12
+
+        # Weighted sum of deltas: each pixel gets a smooth blend of every
+        # cluster's correction, proportional to how close it is to each.
+        # Shape: (n_pixels, 3)
+        blended_delta = weights @ deltas
+
+        result_flat += blended_delta
 
         result_lab = result_flat.reshape(h, w, 3)
         result_lab[:, :, 0] = np.clip(result_lab[:, :, 0], 0, 255)
@@ -326,7 +353,7 @@ class Gradia:
     # -----------------------------------------------------------------------
 
     def grade_wasserstein(self, target: np.ndarray, bit_depth: int = 8,
-                           n_slices: int = 200, sample_size: int = 50000) -> np.ndarray:
+                           n_slices: int = 20, sample_size: int = 50000) -> np.ndarray:
         """
         Sliced Wasserstein optimal transport color grading via iterative advection.
 
@@ -341,8 +368,12 @@ class Gradia:
 
         Args:
             n_slices:    Number of iterations. Each iteration samples one
-                         random direction and advects the source. 200 is a
-                         good balance of quality vs speed.
+                         random direction and advects the source. 20 is a
+                         good starting point. More is not always better -
+                         quantile-matching noise can push pixels past the
+                         converged reference at higher counts, so going
+                         well beyond 50-100 often makes results worse
+                         rather than better.
             sample_size: Max reference pixels sampled for quantile estimation.
                          Higher = more accurate quantile matching.
         """
@@ -415,20 +446,22 @@ class Gradia:
 
             # Apply the displacement with a step factor (iterative advection).
             #
-            # Quantile matching is noisy because the reference is sampled and
-            # target ranks map imprecisely to reference indices. Over 200
-            # iterations, this noise causes small residual movements even
-            # after the source has converged toward the reference, and some
-            # pixels end up pushed outside [0, 1]. The final clip then
-            # crushes those pixels to the edges of the range, which shows up
-            # as blown highlights, crushed shadows, or desaturated colors.
+            # Quantile matching is noisy because the reference is sampled
+            # and target ranks map imprecisely to reference indices. Over
+            # many iterations, this noise causes small residual movements
+            # even after the source has converged toward the reference,
+            # and some pixels end up pushed outside [0, 1]. The final clip
+            # then crushes those pixels to the edges of the range, which
+            # shows up as blown highlights, crushed shadows, or desaturated
+            # colors.
             #
-            # A step factor of 0.5 halves each iteration's move. With 200
-            # iterations, effective convergence is equivalent to ~100 full
-            # steps, which is plenty while staying well within the valid
-            # color range. The principle is to keep total accumulated
-            # motion bounded: either few iterations at full step, or many
-            # iterations at a fractional step.
+            # A step factor of 0.5 halves each iteration's move to keep
+            # total accumulated motion bounded. Combined with the low
+            # default iteration count (20), this gives a stable result
+            # that converges without overshooting. Users who want to go
+            # higher can do so via --n-slices, but note that more is not
+            # always better - beyond ~50-100 iterations the method tends
+            # to plateau or regress as noise dominates.
             STEP_FACTOR = 0.5
             result_flat += STEP_FACTOR * np.outer(displacement, direction)
 
@@ -456,7 +489,7 @@ class Gradia:
 
     def process(self, target_path: str, method: str = "reinhard",
                  output_dir: Path = None, output_suffix: str = None,
-                 n_colors: int = 8, n_slices: int = 200, sample_size: int = 50000,
+                 n_colors: int = 8, n_slices: int = 20, sample_size: int = 50000,
                  visualize: bool = False, preview: bool = False) -> Path:
         """
         Grade a single target image file and write the output.
@@ -602,8 +635,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Wasserstein-specific
     parser.add_argument("--n-slices",
-        type=int, default=200,
-        help="(wasserstein method) Number of advection iterations. More = more accurate, slower.")
+        type=int, default=20,
+        help="(wasserstein method) Number of advection iterations. 20 is a good starting point - more is not always better, since quantile-matching noise can overshoot the reference at higher counts.")
 
     # Shared by kantorovich and wasserstein
     parser.add_argument("--sample-size",
