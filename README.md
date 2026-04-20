@@ -148,9 +148,9 @@ Finds the **optimal linear affine mapping** between the two color distributions 
 python gradia.py reference.jpg photo.jpg --method forgy
 ```
 
-Uses **K-means clustering** to extract the dominant colors from each image, matches reference palette colors to target palette colors by perceptual distance in LAB space, then shifts each pixel toward its matched color with a Gaussian-weighted blend.
+Uses **K-means clustering with soft assignment** to extract the dominant colors from each image, matches reference palette colors to target palette colors by perceptual distance in LAB space, then shifts each pixel by a Gaussian-weighted blend of corrections from every cluster.
 
-**How it works:** Both images are reduced to their `n` most dominant colors. Each dominant color in the target is matched to the closest dominant color in the reference. Pixels are then shifted by the delta between matched colors, with a smooth falloff so pixels near the center of a cluster are shifted more than pixels on the edge.
+**How it works:** Both images are reduced to their `n` most dominant colors. Each dominant color in the target is matched to the closest dominant color in the reference, producing a correction delta per cluster. Instead of assigning each pixel to exactly one cluster (which creates visible seams at cluster boundaries), every pixel gets a Gaussian weight against every cluster based on distance. The final correction is a weighted average of all cluster deltas, blending smoothly across boundaries.
 
 **Best for:**
 - Images with distinct color regions (portraits, product photos, landscapes)
@@ -188,14 +188,16 @@ Uses **Sliced Wasserstein optimal transport with iterative advection** to find a
 
 **Tradeoffs:**
 - Slowest method - runtime scales with `--n-slices`
-- More iterations = more accurate but slower
+- More iterations is not always better (see below)
 
 **Flags:**
 
 | Flag | Default | Description |
 |---|---|---|
-| `--n-slices` | `200` | Number of advection iterations. More = more accurate, slower |
+| `--n-slices` | `20` | Number of advection iterations. More is not always better - see note below |
 | `--sample-size` | `50000` | Max reference pixels sampled for quantile estimation |
+
+**A note on iteration count:** quantile matching with a sampled reference is inherently noisy. The first 10-30 iterations do most of the real work - after that, the algorithm has largely converged and additional iterations mostly accumulate random noise, which can push pixels past the converged reference and cause blown highlights or desaturated extremes. 20 is the default because it tends to produce stable, natural results. Push it higher with `--n-slices 50` or `--n-slices 100` if you want, but don't be surprised if the output starts to look *worse* rather than better at counts above 100.
 
 ---
 
@@ -225,7 +227,7 @@ usage: gradia.py [-h]
 | `-i, --intensity` | `0.8` | Grade intensity: `0.0` = no change, `1.0` = full grade |
 | `-m, --method` | `reinhard` | Grading method (see Methods above) |
 | `--n-colors` | `8` | Palette colors for K-means (forgy method) |
-| `--n-slices` | `200` | Advection iterations (wasserstein method) |
+| `--n-slices` | `20` | Advection iterations (wasserstein method) |
 | `--sample-size` | `50000` | Max pixels sampled (kantorovich and wasserstein) |
 | `--visualize` | off | Save a before/after histogram PNG alongside each output |
 | `--preview` | off | Show side-by-side comparison before saving |
@@ -261,7 +263,7 @@ python gradia.py reference.jpg photo.jpg --method kantorovich
 python gradia.py reference.jpg photo.jpg --method wasserstein
 ```
 
-**Faster wasserstein with fewer iterations**
+**Push wasserstein further with more iterations**
 ```bash
 python gradia.py reference.jpg photo.jpg --method wasserstein --n-slices 50
 ```
@@ -343,14 +345,11 @@ Install the POT library:
 pip install POT
 ```
 
-**Wasserstein is too slow**
-Reduce iterations. Results are still good at lower counts:
-```bash
-python gradia.py ref.jpg photo.jpg --method wasserstein --n-slices 50
-```
-
 **Wasserstein results look blown out or washed out in places**
-Too much total motion is pushing some pixels outside the valid color range, where they get clipped. Reduce the intensity with `-i 0.6` or lower, or reduce iterations with `--n-slices 100`.
+Too much total motion is pushing some pixels outside the valid color range, where they get clipped. Reduce the intensity with `-i 0.6` or lower. If you've increased `--n-slices` above the default of 20, try going back down - higher iteration counts can actually make this worse, not better.
+
+**Wasserstein results look subtle or understated**
+Raise `--n-slices` to 30 or 50 for more aggressive matching. Don't go much higher than 100 - the algorithm tends to plateau and then regress as noise dominates.
 
 **16-bit TIFF output looks correct but washed out in preview**
 The `--preview` window scales 16-bit images to 8-bit for display only. The saved file is correct - check it in your photo editor rather than the preview window.
