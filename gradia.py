@@ -353,7 +353,8 @@ class Gradia:
     # -----------------------------------------------------------------------
 
     def grade_wasserstein(self, target: np.ndarray, bit_depth: int = 8,
-                           n_slices: int = 20, sample_size: int = 50000) -> np.ndarray:
+                           n_slices: int = 20, sample_size: int = 50000,
+                           smooth: bool = False) -> np.ndarray:
         """
         Sliced Wasserstein optimal transport color grading via iterative advection.
 
@@ -376,6 +377,12 @@ class Gradia:
                          rather than better.
             sample_size: Max reference pixels sampled for quantile estimation.
                          Higher = more accurate quantile matching.
+            smooth:      If True, bilateral-filter the per-pixel displacement
+                         (the transport correction) before applying it. This
+                         smooths out noise from rank matching while preserving
+                         edges that exist in the original image, which softens
+                         harsh transitions without breaking the transport
+                         property. Slower but often produces cleaner output.
         """
         ref8 = to_8bit(self.reference)
         tgt8 = to_8bit(target)
@@ -467,6 +474,39 @@ class Gradia:
 
         result_flat = np.clip(result_flat, 0, 1)
 
+        # Optional bilateral smoothing of the transport correction.
+        #
+        # Rank matching is a hard assignment: two pixels with nearly-identical
+        # projections can end up mapping to very different reference values
+        # if they happen to straddle a rank boundary. This shows up as speckle
+        # or harsh transitions in the output.
+        #
+        # Bilateral filtering the correction map (result - original) rather
+        # than the result itself is the trick: it smooths out the transport
+        # noise while preserving the edges that actually exist in the image.
+        # The transport property is preserved because the global statistics
+        # of the correction barely change under bilateral filtering - only
+        # local high-frequency noise gets smoothed.
+        if smooth:
+            h_img, w_img = tgt_lab.shape[:2]
+            original_lab = tgt_lab.reshape(-1, 3)
+            correction   = (result_flat - original_lab).reshape(h_img, w_img, 3)
+
+            # cv2.bilateralFilter needs uint8 or float32; our data is float32
+            # in [~-1, ~1] range (since LAB values were normalized to [0, 1])
+            smoothed = cv2.bilateralFilter(
+                correction.astype(np.float32),
+                d=15,             # diameter of pixel neighborhood
+                sigmaColor=0.25,  # range sigma - how different corrections
+                                  # are treated as "edges" in the correction
+                                  # space. Higher values smooth more aggressively.
+                                  # 0.25 is tuned to produce a visible softening
+                                  # effect without washing out real color edges.
+                sigmaSpace=15.0,  # spatial sigma - how far the blur reaches
+            )
+
+            result_flat = np.clip(original_lab + smoothed.reshape(-1, 3), 0, 1)
+
         # Convert back to uint8 LAB before the colorspace conversion.
         # cv2.cvtColor interprets LAB ranges differently based on dtype:
         # uint8 input expects L, a, b all in [0, 255] (OpenCV's internal
@@ -490,6 +530,7 @@ class Gradia:
     def process(self, target_path: str, method: str = "reinhard",
                  output_dir: Path = None, output_suffix: str = None,
                  n_colors: int = 8, n_slices: int = 20, sample_size: int = 50000,
+                 smooth: bool = False,
                  visualize: bool = False, preview: bool = False) -> Path:
         """
         Grade a single target image file and write the output.
@@ -523,7 +564,9 @@ class Gradia:
             result = self.grade_forgy(tgt, bit_depth=bit_depth, n_colors=n_colors)
         else:  # wasserstein
             result = self.grade_wasserstein(tgt, bit_depth=bit_depth,
-                                             n_slices=n_slices, sample_size=sample_size)
+                                             n_slices=n_slices,
+                                             sample_size=sample_size,
+                                             smooth=smooth)
 
         out_dir  = output_dir or target_path.parent
         out_path = out_dir / (target_path.stem + output_suffix + target_path.suffix)
@@ -643,6 +686,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=int, default=50000,
         help="(kantorovich, wasserstein) Max pixels sampled for transport computation.")
 
+    parser.add_argument("--smooth", action="store_true",
+        help="(wasserstein method) Bilateral-filter the transport correction to smooth rank-matching noise while preserving image edges. Slower but produces cleaner output.")
+
     parser.add_argument("--visualize", action="store_true",
         help="Save a before/after histogram PNG alongside each output.")
     parser.add_argument("--preview", action="store_true",
@@ -691,6 +737,7 @@ def run():
                 n_colors=args.n_colors,
                 n_slices=args.n_slices,
                 sample_size=args.sample_size,
+                smooth=args.smooth,
                 visualize=args.visualize,
                 preview=args.preview,
             )
