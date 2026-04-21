@@ -136,13 +136,13 @@ Finds the **optimal linear affine mapping** between the two color distributions 
 - Falls back to Reinhard automatically if POT is not installed
 - May underperform on images with complex, multimodal color distributions
 
-![Kantorovich method example](examples/kantorovich.jpg)
-
 **Flag:**
 
 | Flag | Default | Description |
 |---|---|---|
 | `--sample-size` | `50000` | Max pixels sampled for transport computation |
+
+![Kantorovich method example](examples/kantorovich.jpg)
 
 ---
 
