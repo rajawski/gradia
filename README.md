@@ -111,6 +111,8 @@ Transfers the **mean and standard deviation** of each color channel in LAB color
 - Less aggressive than other methods - won't fully match extreme looks
 - Only matches two statistical moments (mean, std), not the full distribution shape
 
+![Reinhard method example](examples/reinhard.jpg)
+
 ---
 
 ### Kantorovich (Linear Transport)
@@ -133,6 +135,8 @@ Finds the **optimal linear affine mapping** between the two color distributions 
 - Requires the `POT` library (`pip install POT`)
 - Falls back to Reinhard automatically if POT is not installed
 - May underperform on images with complex, multimodal color distributions
+
+![Kantorovich method example](examples/kantorovich.jpg)
 
 **Flag:**
 
@@ -168,6 +172,8 @@ Uses **K-means clustering with soft assignment** to extract the dominant colors 
 |---|---|---|
 | `--n-colors` | `8` | Number of palette colors to extract. Range: 4-16 |
 
+![Forgy method example](examples/forgy.jpg)
+
 ---
 
 ### Wasserstein (Optimal Transport)
@@ -196,8 +202,13 @@ Uses **Sliced Wasserstein optimal transport with iterative advection** to find a
 |---|---|---|
 | `--n-slices` | `20` | Number of advection iterations. More is not always better - see note below |
 | `--sample-size` | `50000` | Max reference pixels sampled for quantile estimation |
+| `--smooth` | off | Bilateral-filter the transport correction to reduce noise from rank matching |
 
 **A note on iteration count:** quantile matching with a sampled reference is inherently noisy. The first 10-30 iterations do most of the real work - after that, the algorithm has largely converged and additional iterations mostly accumulate random noise, which can push pixels past the converged reference and cause blown highlights or desaturated extremes. 20 is the default because it tends to produce stable, natural results. Push it higher with `--n-slices 50` or `--n-slices 100` if you want, but don't be surprised if the output starts to look *worse* rather than better at counts above 100.
+
+**A note on `--smooth`:** rank matching is a hard assignment, which can produce harsh transitions or speckle where two target pixels with nearly-identical projections map to very different reference values. Passing `--smooth` bilateral-filters the per-pixel transport correction before applying it, smoothing out that noise while preserving the edges that actually exist in the image. Slower than regular Wasserstein, but often produces noticeably cleaner output on noisy or detail-heavy images.
+
+![Wasserstein method example](examples/wasserstein.jpg)
 
 ---
 
@@ -212,6 +223,7 @@ usage: gradia.py [-h]
                  [--n-colors N_COLORS]
                  [--n-slices N_SLICES]
                  [--sample-size SAMPLE_SIZE]
+                 [--smooth]
                  [--visualize]
                  [--preview]
                  [-v] [-q]
@@ -229,6 +241,7 @@ usage: gradia.py [-h]
 | `--n-colors` | `8` | Palette colors for K-means (forgy method) |
 | `--n-slices` | `20` | Advection iterations (wasserstein method) |
 | `--sample-size` | `50000` | Max pixels sampled (kantorovich and wasserstein) |
+| `--smooth` | off | Bilateral-filter transport correction (wasserstein method) |
 | `--visualize` | off | Save a before/after histogram PNG alongside each output |
 | `--preview` | off | Show side-by-side comparison before saving |
 | `-v, --verbose` | off | Enable debug logging |
@@ -266,6 +279,11 @@ python gradia.py reference.jpg photo.jpg --method wasserstein
 **Push wasserstein further with more iterations**
 ```bash
 python gradia.py reference.jpg photo.jpg --method wasserstein --n-slices 50
+```
+
+**Wasserstein with bilateral smoothing for cleaner output**
+```bash
+python gradia.py reference.jpg photo.jpg --method wasserstein --smooth
 ```
 
 **Match palette with more color clusters**
