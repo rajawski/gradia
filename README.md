@@ -328,6 +328,8 @@ Saved as `<output_name>.histogram.png` alongside the result. Shows an overlaid h
 
 Useful for understanding what the grade actually did and for debugging unexpected results.
 
+![Histogram example](examples/histogram.jpg)
+
 ---
 
 ## Choosing the Right Method
